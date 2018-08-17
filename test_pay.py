@@ -1,6 +1,6 @@
-from ethereum import tester
+from ethereum.tools import tester
 from ethereum import utils
-from ethereum._solidity import get_solidity
+from ethereum.tools._solidity import get_solidity
 SOLIDITY_AVAILABLE = get_solidity() is not None
 from Crypto.Hash import SHA256
 
@@ -12,9 +12,9 @@ slogging.configure(':INFO,eth.vm:INFO')
 #slogging.configure(':DEBUG')
 #slogging.configure(':DEBUG,eth.vm:TRACE')
 
-xor = lambda (x,y): chr(ord(x) ^ ord(y))
+xor = lambda x,y: chr(ord(x) ^ ord(y))
 xors = lambda x,y: ''.join(map(xor,zip(x,y)))
-zfill = lambda s: (32-len(s))*'\x00' + s
+zfill = lambda s: (32-len(s))*b'\x00' + s
 flatten = lambda x: [z for y in x for z in y]
 
 def int_to_bytes(x):
@@ -23,15 +23,15 @@ def int_to_bytes(x):
     return utils.int_to_bytes((1<<256) + x if x < 0 else x)
 
 def broadcast(p, r, h, sig):
-    print 'player[%d]'%p.i, 'broadcasts', r, h.encode('hex'), sig
+    print( 'player[%d]'%p.i, 'broadcasts', r, h.hex(), sig)
 
 def sign(h, priv):
     assert len(h) == 32
     V, R, S = bitcoin.ecdsa_raw_sign(h, priv)
     return V,R,S
 
-def verify_signature(addr, h, (V,R,S)):
-    pub = bitcoin.ecdsa_raw_recover(h, (V,R,S))
+def verify_signature(addr, h, sig):
+    pub = bitcoin.ecdsa_raw_recover(h, sig) # sig=V,R,S
     pub = bitcoin.encode_pubkey(pub, 'bin')
     addr_ = utils.sha3(pub[1:])[12:]
     assert addr_ == addr
@@ -44,10 +44,9 @@ def getstatus():
     creditsR = contract.credits(1)
     wdrawL = contract.withdrawals(0)
     wdrawR = contract.withdrawals(1)
-    print 'Status:', ['OK','PENDING'][contract.status()]
-    print '[L] deposits:', depositsL, 'credits:', creditsL, 'withdrawals:', wdrawL
-    print '[R] deposits:', depositsR, 'credits:', creditsR, 'withdrawals:', wdrawR
-    
+    print( 'Status:', ['OK','PENDING'][contract.status()])
+    print( '[L] deposits:', depositsL, 'credits:', creditsL, 'withdrawals:', wdrawL)
+    print( '[R] deposits:', depositsR, 'credits:', creditsR, 'withdrawals:', wdrawR)
 
 class Player():
     def __init__(self, sk, i, contract):
@@ -67,20 +66,19 @@ class Player():
         assert r == self.lastRound + 1
         # Assumption - don't call acceptInputs(r,...) multiple times
 
-        depositsL    = contract.deposits(0);
-        depositsR    = contract.deposits(1);
-        withdrawalsL = contract.withdrawals(0);
-        withdrawalsR = contract.withdrawals(1);
-
+        depositsL    = contract.deposits(0)
+        depositsR    = contract.deposits(1)
+        withdrawalsL = contract.withdrawals(0)
+        withdrawalsR = contract.withdrawals(1)
+        
         _, (creditsL, creditsR, withdrawnL, withdrawnR) = self.lastCommit
 
-	assert payL <= depositsL + creditsL
-	assert payR <= depositsR + creditsR
-	assert wdrawL <= depositsL + creditsL - payL
-	assert wdrawR <= depositsR + creditsR - payR
-
-	creditsL += payR - payL - wdrawL
-	creditsR += payL - payR - wdrawR
+        assert payL <= depositsL + creditsL
+        assert payR <= depositsR + creditsR
+        assert wdrawL <= depositsL + creditsL - payL
+        assert wdrawR <= depositsR + creditsR - payR
+        creditsL += payR - payL - wdrawL
+        creditsR += payL - payR - wdrawR
         withdrawalsL += wdrawL
         withdrawalsR += wdrawR
 
@@ -106,14 +104,14 @@ class Player():
         self.lastRound += 1
 
     def getstatus(self):
-        print '[Local view of Player %d]' % self.i
-        print 'Last round:', self.lastRound
+        print( '[Local view of Player %d]' % self.i)
+        print( 'Last round:', self.lastRound)
         depositsL = contract.deposits(0)
         depositsR = contract.deposits(1)
         _, (creditsL, creditsR, wdrawL, wdrawR) = self.lastCommit
-        print 'Status:', self.status
-        print '[L] deposits:', depositsL, 'credits:', creditsL, 'withdrawals:', wdrawL
-        print '[R] deposits:', depositsR, 'credits:', creditsR, 'withdrawals:', wdrawR
+        print( 'Status:', self.status)
+        print( '[L] deposits:', depositsL, 'credits:', creditsL, 'withdrawals:', wdrawL)
+        print( '[R] deposits:', depositsR, 'credits:', creditsR, 'withdrawals:', wdrawR)
 
 
     def update(self):
@@ -124,19 +122,19 @@ class Player():
         
 
 # Create the simulated blockchain
-s = tester.state()
+s = tester.Chain()
 s.mine()
 tester.gas_limit = 3141592
 
 
 keys = [tester.k1,
         tester.k2]
-addrs = map(utils.privtoaddr, keys)
+addrs = list (map(utils.privtoaddr, keys) )
 
 # Create the contract
 contract_code = open('contractPay.sol').read()
-contract = s.abi_contract(contract_code, language='solidity',
-                          constructor_parameters= ((addrs[0], addrs[1]),) )
+contract = s.contract(contract_code, language='solidity',
+                          args= ((addrs[0], addrs[1]),) )
 
 
 def completeRound(players, r, payL, payR, wdrawL, wdrawR):
@@ -169,17 +167,17 @@ def test1():
     # Check some assertions
     try: completeRound(players, 1, 6, 0, 0, 0) # Should fail
     except AssertionError: pass # Should fail
-    else: raise ValueError, "Too much balance!"
-
+    else: raise ValueError("Too much balance!")
+    
     completeRound(players, 1, 0, 2, 0, 1)
     players[0].getstatus()
 
-    print 'Triggering'
+    print( 'Triggering')
     contract.trigger(sender=keys[0])
     players[0].update()
     s.mine(15)
 
-    print 'Finalize'
+    print( 'Finalize')
     contract.finalize()
     getstatus()
 
